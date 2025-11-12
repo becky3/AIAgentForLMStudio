@@ -59,7 +59,7 @@ def main():
     args = parser.parse_args()
 
     llm = ChatOpenAI(
-        base_url=settings.LMSTUDIO_BASE_URL,
+        base_url=settings.LMSTUDIO_URL,
         api_key="lm-studio",
         model=settings.LMSTUDIO_MODEL,
         temperature=0.3
