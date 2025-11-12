@@ -9,23 +9,22 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    OPENAI_API_KEY: str
+    OPENAI_API_KEY: str= ""
     ANTHROPIC_API_KEY: str = ""
-    TAVILY_API_KEY: str
+    TAVILY_API_KEY: str = ""
     LANGCHAIN_TRACING_V2: str = "false"
     LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
     LANGCHAIN_API_KEY: str = ""
     LANGCHAIN_PROJECT: str = "agent-book"
 
     # LM Studio 接続設定
-    LMSTUDIO_BASE_URL: str = "http://localhost:1234/v1"
+    LMSTUDIO_URL: str = ""
     LMSTUDIO_MODEL: str = ""
 
     # for Application
     openai_smart_model: str = ""
     openai_embedding_model: str = ""
     anthropic_smart_model: str = ""
-
 
     default_reflection_db_path: str = "tmp/reflection_db.json"
     language: str = "日本語"
