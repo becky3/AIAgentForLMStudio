@@ -22,7 +22,7 @@ class PassiveGoalCreator:
     ):
         self.llm = llm
 
-    def run(self, query: str, language: str) -> Goal:
+    def run(self, query: str) -> Goal:
         prompt = ChatPromptTemplate.from_template(dedent("""
 ユーザーの入力を分析し、明確で実行可能な目標を生成してください。
 
@@ -31,7 +31,7 @@ class PassiveGoalCreator:
 2. あなたが実行可能な行動は以下の行動だけです。
    - インターネットを利用して、目標を達成するための調査を行う。
    - ユーザーのためのレポートを生成する。
-   - 構造体の値には{language}で回答を記載する。
+   - 構造体の値には日本語で回答を記載する。
    - 内容は具体的で実行可能。
 3. 決して2.以外の行動を取ってはいけません。
 
@@ -39,7 +39,7 @@ class PassiveGoalCreator:
 """))
 
         chain = prompt | self.llm.with_structured_output(Goal)
-        return chain.invoke({"query": query, "language": language})
+        return chain.invoke({"query": query})
 
 
 def main():
@@ -65,7 +65,7 @@ def main():
         temperature=0.3
     )
     goal_creator = PassiveGoalCreator(llm=llm)
-    result: Goal = goal_creator.run(query=args.task, language=settings.language)
+    result: Goal = goal_creator.run(query=args.task)
 
     print(f"{result.text}")
 
