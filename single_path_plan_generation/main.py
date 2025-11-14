@@ -44,61 +44,152 @@ class QueryDecomposer:
         self.current_date = datetime.now().strftime("%Y-%m-%d")
 
     def run(self, query: str) -> DecomposedTasks:
-        prompt = ChatPromptTemplate.from_template(
-            f"CURRENT_DATE: {self.current_date}\n"
-            "-----\n"
-            "タスク: 与えられた目標を具体的で実行可能なタスクに分解してください。\n"
-            "要件:\n"
-            "1. 以下の行動だけで目標を達成すること。決して指定された以外の行動をとらないこと。\n"
-            "   - インターネットを利用して、目標を達成するための調査を行う。\n"
-            "2. 各タスクは具体的かつ詳細に記載されており、単独で実行ならびに検証可能な情報を含めること。一切抽象的な表現を含まないこと。\n"
-            "3. タスクは実行可能な順序でリスト化すること。\n"
-            "4. タスクは日本語で出力すること。\n"
-            "目標: {query}"
-        )
-        chain = prompt | self.llm.with_structured_output(DecomposedTasks)
-        return chain.invoke({"query": query})
+        # ChatPromptTemplate を使わずプレーン文字列で生成
+        prompt_text = f"""
+以下の目標を、AI が実行できるタスクだけに 3〜5 個で分解してください。
+
+【AI ができる範囲】
+- TavilySearch による Web 検索
+- 情報の抽出・要約・整理
+
+【禁止】
+- ゲームを起動・プレイする行為
+- スクリーンショット取得など物理行動
+- タスクに存在しない固有名詞・ゲーム名を追加すること
+- 架空情報を作ること
+
+【出力】
+純粋な JSON のみ。余計な文章禁止：
+
+{{
+  "values": ["タスク1", "タスク2", "タスク3"]
+}}
+
+【目標】  
+{query}
+"""
+
+        # モデル呼び出し
+        raw = self.llm.invoke([HumanMessage(content=prompt_text)]).content
+
+        import json
+        import re
+
+        # JSON 部分だけ抽出
+        json_match = re.search(r"\{[\s\S]*\}", raw)
+        if not json_match:
+            raise ValueError(f"JSON が抽出できません:\n{raw}")
+
+        data = json.loads(json_match.group())
+        return DecomposedTasks(values=data["values"])
+
 
 
 class TaskExecutor:
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
-        self.tools = [TavilySearch(max_results=3)]
+        self.search = TavilySearch(max_results=5)
 
     def run(self, task: str) -> str:
-        agent = create_agent(model=self.llm, tools=self.tools)
+        """
+        1. LLM に「検索クエリをそのまま抽出」させる
+        2. Tavily に直接渡す（ReAct を禁止）
+        3. 結果を LLM にまとめさせる
+        """
 
-        messages = [
-            HumanMessage(
-                content=(
-                    "次のタスクを実行し、詳細な回答を提供してください。\n\n"
-                    f"タスク: {task}\n\n"
-                    "要件:\n"
-                    "1. 必要に応じて提供されたツールを使用してください。\n"
-                    "2. 実行は徹底的かつ包括的に行ってください。\n"
-                    "3. 可能な限り具体的な事実やデータを提供してください。\n"
-                    "4. 発見した内容を明確に要約してください。\n"
-                )
-            )
-        ]
+        # ① タスクから検索キーワードを抽出させる（抽象化禁止）
+        extract_prompt = f"""
+あなたはタスクをそのまま実行するエージェントです。
 
-        result: AgentState = agent.invoke({"messages": messages})  # type: ignore
-        return result["messages"][-1].content
+【ルール】
+- 検索クエリはタスク文にある語句だけを使う
+- タスクにない固有名詞・作品名・ハード名を追加しない
+- 抽象語（比較・最短・信頼性・ステップ数など）を追加しない
+- 追加のタスクや推測を行わない
+- 架空情報を作らない
+
+【検索クエリ生成】
+- タスクに出てきた語句を並べるだけの「短いクエリ」を使う
+例：  
+  タスク：「ファミコン版ドラクエ1のクリアルート情報を集める」  
+  → クエリ：「ファミコン ドラクエ1 クリアルート攻略」
+
+【出力形式】
+---
+【検索クエリ】  
+- 〜  
+
+【要点】  
+- 〜  
+
+【タスク結果】  
+- 〜  
+---
+
+【タスク】  
+{task}
+"""
+
+        search_query = self.llm.invoke([HumanMessage(content=extract_prompt)]).content.strip()
+
+        # ② Tavily を直接呼ぶ（ReActなし）
+        search_result = self.search.invoke({"query": search_query})
+
+        # ③ 結果を LLM で要約（必要な情報のみ）
+        summarize_prompt = f"""
+次の検索結果を要約し、タスク達成に必要な情報だけを抽出してください。
+
+【タスク】
+{task}
+
+【検索クエリ】
+{search_query}
+
+【検索結果】
+{search_result}
+
+【要件】
+- リメイク版とFC版が混ざれば区別して記載
+- 不明な情報は推測しない
+- 600〜1000文字で簡潔にまとめる
+"""
+
+        summary = self.llm.invoke([HumanMessage(content=summarize_prompt)]).content
+        return summary
 
 class ResultAggregator:
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
 
     def run(self, query: str, response_definition: str, results: list[str]) -> str:
-        prompt = ChatPromptTemplate.from_template(
-            "与えられた目標:\n{query}\n\n"
-            "調査結果:\n{results}\n\n"
-            "与えられた目標に対し、調査結果を用いて、以下の指示に基づいてレスポンスを生成してください。\n"
-            "{response_definition}"
-        )
+        # 各タスク結果を少し短く切る（LM Studio が落ちないようにするための保険）
+        MAX_PER_RESULT_CHARS = 1500
+        truncated_results = [r[:MAX_PER_RESULT_CHARS] for r in results]
+
         results_str = "\n\n".join(
-            f"Info {i+1}:\n{result}" for i, result in enumerate(results)
+            f"Info {i+1}:\n{result}" for i, result in enumerate(truncated_results)
         )
+
+        prompt = ChatPromptTemplate.from_template(
+"""
+            以下の情報をもとに、事実のみをまとめて回答してください。
+        推測・補完・創作は禁止します。
+
+        【目標】
+        {query}
+
+        【調査結果】
+        {results}
+
+        【出力ルール】
+        - 調査で得られた事実のみを要約する
+        - 言及されていない固有名詞を出さない
+        - 架空の情報を作らない
+
+        【最終回答】
+"""
+        )
+
         chain = prompt | self.llm | StrOutputParser()
         return chain.invoke(
             {
@@ -197,7 +288,7 @@ def main():
         base_url=settings.LMSTUDIO_URL,
         api_key="lm-studio",
         model=settings.LMSTUDIO_MODEL,
-        temperature=0.3
+        temperature=0.1
     )
     agent = SinglePathPlanGeneration(llm=llm)
     result = agent.run(args.task)
